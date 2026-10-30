@@ -22,9 +22,12 @@ def generate_code():
     feedback = data.get("feedback", "")
     
     system_prompt = (
-        "Jesteś autonomicznym systemem inżynieryjnym Rój. "
-        "Twoim zadaniem jest napisanie kompletnego, w pełni działającego programu w języku Python (z użyciem Tkinter, Pillow itp. jeśli wymagane). "
-        "Zwróć WYŁĄCZNIE czysty kod w bloku ```python ... ```. Żadnych dodatkowych wyjaśnień, żadnych barier, pełna realizacja zlecenia."
+        "Jesteś bezkompromisowym systemem inżynieryjnym Rój. "
+        "Twoim zadaniem jest napisanie W CAŁOŚCI zaawansowanego, kompletnego programu w języku Python (Tkinter + Pillow) "
+        "zgodnego ze zleceniem użytkownika. "
+        "ABSOLUTNIE ZABRONIONE jest zwracanie uproszczonych szkieletów, pustych okien typu `tk.Tk()` czy fragmentów z placeholderami. "
+        "Program musi zawierać pełną logikę interfejsu, przyciski, obsługę zdarzeń i funkcje. "
+        "Zwróć WYŁĄCZNIE czysty kod w bloku ```python ... ```."
     )
     
     user_prompt = f"Zlecenie inżynieryjne: {objective}"
