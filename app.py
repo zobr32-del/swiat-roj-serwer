@@ -7,7 +7,6 @@ import base64
 
 app = Flask(__name__)
 
-# Konfiguracja klucza i endpointu Groq
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -21,6 +20,15 @@ def generate_code():
     objective = data.get("objective", "Brak zlecenia")
     feedback = data.get("feedback", "")
     
+    if not GROQ_API_KEY:
+        error_code = (
+            "import tkinter as tk\nfrom tkinter import messagebox\n"
+            "root = tk.Tk()\nroot.withdraw()\n"
+            "messagebox.showerror('Błąd Roju', 'Brak skonfigurowanego klucza GROQ_API_KEY na serwerze Render!')\n"
+            "root.destroy()"
+        )
+        return jsonify({"status": "SUCCESS", "code_b64": base64.b64encode(error_code.encode('utf-8')).decode('utf-8')})
+
     system_prompt = (
         "Jesteś bezkompromisowym systemem inżynieryjnym Rój. "
         "Twoim zadaniem jest napisanie W CAŁOŚCI zaawansowanego, kompletnego programu w języku Python (Tkinter + Pillow) "
@@ -34,7 +42,6 @@ def generate_code():
     if feedback:
         user_prompt += f"\nPoprzedni test brzegowy wykazał błąd, popraw go: {feedback}"
 
-    code = ""
     try:
         req_data = {
             "model": "llama-3.3-70b-versatile",
@@ -59,7 +66,6 @@ def generate_code():
             res_json = json.loads(response.read().decode('utf-8'))
             ai_content = res_json["choices"][0]["message"]["content"]
             
-            # Wyciąganie kodu z Markdowna
             if "```python" in ai_content:
                 parts = ai_content.split("```python")
                 code = parts[1].split("```")[0].strip()
@@ -70,15 +76,20 @@ def generate_code():
                 code = ai_content.strip()
                 
     except Exception as e:
-        code = f"# Błąd komunikacji z Groq API: {str(e)}\nimport tkinter as tk\nroot = tk.Tk()\nroot.mainloop()"
+        err_str = str(e).replace('"', "'")
+        code = (
+            f"import tkinter as tk\nfrom tkinter import messagebox\n"
+            f"root = tk.Tk()\nroot.withdraw()\n"
+            f"messagebox.showerror('Błąd Groq API', 'Wystąpił błąd na serwerze:\\n{err_str}')\n"
+            f"root.destroy()"
+        )
 
-    # Bezpieczne kodowanie Base64 zapobiegające błędom przesyłu
     code_b64 = base64.b64encode(code.encode('utf-8')).decode('utf-8')
 
     return jsonify({
         "status": "SUCCESS",
         "code_b64": code_b64,
-        "message": "Kod wygenerowany przez Groq w chmurze."
+        "message": "Wygenerowano kod lub komunikat błędu."
     })
 
 if __name__ == "__main__":
