@@ -7,9 +7,13 @@ import base64
 
 app = Flask(__name__)
 
+# Pobieramy klucz Gemini API ze zmiennych środowiskowych Rendera
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ONLINE", "system": "Swiat Roj Serwer v25.9 - Groq AI Engine"})
+    return jsonify({"status": "ONLINE", "system": "Swiat Roj Serwer v25.9 - Gemini Free Engine"})
 
 @app.route("/generate", methods=["POST"])
 def generate_code():
@@ -17,14 +21,11 @@ def generate_code():
     objective = data.get("objective", "Brak zlecenia")
     feedback = data.get("feedback", "")
     
-    # Pobranie i oczyszczenie klucza ze spacji/znaków nowej linii
-    groq_api_key = os.environ.get("GROQ_API_KEY", "").strip()
-    
-    if not groq_api_key:
+    if not GEMINI_API_KEY:
         error_code = (
             "import tkinter as tk\nfrom tkinter import messagebox\n"
             "root = tk.Tk()\nroot.withdraw()\n"
-            "messagebox.showerror('Błąd Roju', 'Brak skonfigurowanego klucza GROQ_API_KEY na serwerze Render!')\n"
+            "messagebox.showerror('Błąd Roju', 'Brak skonfigurowanego klucza GEMINI_API_KEY na serwerze Render!')\n"
             "root.destroy()"
         )
         return jsonify({"status": "SUCCESS", "code_b64": base64.b64encode(error_code.encode('utf-8')).decode('utf-8')})
@@ -38,34 +39,28 @@ def generate_code():
         "Zwróć WYŁĄCZNIE czysty kod w bloku ```python ... ```."
     )
     
-    user_prompt = f"Zlecenie inżynieryjne: {objective}"
+    full_prompt = f"{system_prompt}\n\nZlecenie inżynieryjne: {objective}"
     if feedback:
-        user_prompt += f"\nPoprzedni test brzegowy wykazał błąd, popraw go: {feedback}"
+        full_prompt += f"\nPoprzedni test brzegowy wykazał błąd, popraw go: {feedback}"
 
     code = ""
     try:
         req_data = {
-            "model": "llama-3.3-70b-versatile",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.2
+            "contents": [{
+                "parts": [{"text": full_prompt}]
+            }]
         }
         
         req = urllib.request.Request(
-            "https://api.groq.com/openai/v1/chat/completions",
+            GEMINI_URL,
             data=json.dumps(req_data).encode('utf-8'),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {groq_api_key}"
-            },
+            headers={"Content-Type": "application/json"},
             method="POST"
         )
         
         with urllib.request.urlopen(req, timeout=90) as response:
             res_json = json.loads(response.read().decode('utf-8'))
-            ai_content = res_json["choices"][0]["message"]["content"]
+            ai_content = res_json["candidates"][0]["content"]["parts"][0]["text"]
             
             if "```python" in ai_content:
                 parts = ai_content.split("```python")
@@ -81,7 +76,7 @@ def generate_code():
         code = (
             f"import tkinter as tk\nfrom tkinter import messagebox\n"
             f"root = tk.Tk()\nroot.withdraw()\n"
-            f"messagebox.showerror('Błąd Groq API', 'Wystąpił błąd na serwerze:\\n{err_str}')\n"
+            f"messagebox.showerror('Błąd Gemini API', 'Wystąpił błąd na serwerze:\\n{err_str}')\n"
             f"root.destroy()"
         )
 
@@ -90,7 +85,7 @@ def generate_code():
     return jsonify({
         "status": "SUCCESS",
         "code_b64": code_b64,
-        "message": "Wygenerowano kod lub komunikat błędu."
+        "message": "Wygenerowano kod przez darmowe API Gemini."
     })
 
 if __name__ == "__main__":
