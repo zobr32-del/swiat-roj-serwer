@@ -7,9 +7,6 @@ import base64
 
 app = Flask(__name__)
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-
 @app.route("/", methods=["GET"])
 def index():
     return jsonify({"status": "ONLINE", "system": "Swiat Roj Serwer v25.9 - Groq AI Engine"})
@@ -20,7 +17,10 @@ def generate_code():
     objective = data.get("objective", "Brak zlecenia")
     feedback = data.get("feedback", "")
     
-    if not GROQ_API_KEY:
+    # Pobranie i oczyszczenie klucza ze spacji/znaków nowej linii
+    groq_api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    
+    if not groq_api_key:
         error_code = (
             "import tkinter as tk\nfrom tkinter import messagebox\n"
             "root = tk.Tk()\nroot.withdraw()\n"
@@ -42,6 +42,7 @@ def generate_code():
     if feedback:
         user_prompt += f"\nPoprzedni test brzegowy wykazał błąd, popraw go: {feedback}"
 
+    code = ""
     try:
         req_data = {
             "model": "llama-3.3-70b-versatile",
@@ -53,11 +54,11 @@ def generate_code():
         }
         
         req = urllib.request.Request(
-            GROQ_URL,
+            "https://api.groq.com/openai/v1/chat/completions",
             data=json.dumps(req_data).encode('utf-8'),
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {GROQ_API_KEY}"
+                "Authorization": f"Bearer {groq_api_key}"
             },
             method="POST"
         )
