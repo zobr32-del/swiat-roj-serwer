@@ -1,92 +1,99 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import os
-import urllib.request
-import json
-import base64
+import uuid
+import datetime
 
 app = Flask(__name__)
 
-# Pobieramy klucz Gemini API ze zmiennych środowiskowych Rendera
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+# Wirtualna tablica karteczek w pamięci serwera
+# Słownik: { note_id: { "objective": "...", "status": "PENDING/DONE", "answer": "...", "timestamp": "..." } }
+NOTES_BOARD = {}
 
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ONLINE", "system": "Swiat Roj Serwer v25.9 - Gemini Free Engine"})
+    # Czytelny panel HTML do podglądu karteczek w przeglądarce
+    html = """
+    <!DOCTYPE html>
+    <html lang="pl">
+    <head>
+        <meta charset="UTF-8">
+        <title>Świat Rój — Wirtualna Tablica Karteczek</title>
+        <style>
+            body { background: #121212; color: #00ff66; font-family: monospace; padding: 20px; }
+            h1 { border-bottom: 2px solid #00ff66; padding-bottom: 10px; }
+            .note { background: #1e1e1e; border: 1px solid #333; padding: 15px; margin-bottom: 15px; border-radius: 5px; }
+            .pending { border-left: 5px solid #ffaa00; }
+            .done { border-left: 5px solid #00ff66; }
+            pre { background: #0a0a0a; padding: 10px; color: #ffffff; overflow-x: auto; }
+        </style>
+    </head>
+    <body>
+        <h1>🌐 Świat Rój — Tablica Karteczek (Mailbox)</h1>
+        <p>Status serwera: <b>ONLINE (Tryb Asynchroniczny)</b></p>
+        <h2>Aktywne karteczki na tablicy:</h2>
+        {% if notes %}
+            {% for nid, note in notes.items() %}
+                <div class="note {{ 'done' if note.status == 'DONE' else 'pending' }}">
+                    <b>ID Karteczki:</b> {{ nid }}<br>
+                    <b>Czas utworzenia:</b> {{ note.timestamp }}<br>
+                    <b>Status:</b> <span style="color: {{ '#00ff66' if note.status == 'DONE' else '#ffaa00' }}">{{ note.status }}</span><br>
+                    <b>Zlecenie (Zapytanie):</b> {{ note.objective }}<br>
+                    <b>Odpowiedź / Wynik:</b> <pre>{{ note.answer }}</pre>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p>Brak karteczek na tablicy. System oczekuje na zadania.</p>
+        {% endif %}
+    </body>
+    </html>
+    """
+    return render_template_string(html, notes=NOTES_BOARD)
 
-@app.route("/generate", methods=["POST"])
-def generate_code():
+@app.route("/api/post_note", methods=["POST"])
+def post_note():
     data = request.json or {}
-    objective = data.get("objective", "Brak zlecenia")
-    feedback = data.get("feedback", "")
+    objective = data.get("objective", "").strip()
+    if not objective:
+        return jsonify({"status": "ERROR", "message": "Brak zlecenia na karteczce"}), 400
     
-    if not GEMINI_API_KEY:
-        error_code = (
-            "import tkinter as tk\nfrom tkinter import messagebox\n"
-            "root = tk.Tk()\nroot.withdraw()\n"
-            "messagebox.showerror('Błąd Roju', 'Brak skonfigurowanego klucza GEMINI_API_KEY na serwerze Render!')\n"
-            "root.destroy()"
-        )
-        return jsonify({"status": "SUCCESS", "code_b64": base64.b64encode(error_code.encode('utf-8')).decode('utf-8')})
-
-    system_prompt = (
-        "Jesteś bezkompromisowym systemem inżynieryjnym Rój. "
-        "Twoim zadaniem jest napisanie W CAŁOŚCI zaawansowanego, kompletnego programu w języku Python (Tkinter + Pillow) "
-        "zgodnego ze zleceniem użytkownika. "
-        "ABSOLUTNIE ZABRONIONE jest zwracanie uproszczonych szkieletów, pustych okien typu `tk.Tk()` czy fragmentów z placeholderami. "
-        "Program musi zawierać pełną logikę interfejsu, przyciski, obsługę zdarzeń i funkcje. "
-        "Zwróć WYŁĄCZNIE czysty kod w bloku ```python ... ```."
-    )
-    
-    full_prompt = f"{system_prompt}\n\nZlecenie inżynieryjne: {objective}"
-    if feedback:
-        full_prompt += f"\nPoprzedni test brzegowy wykazał błąd, popraw go: {feedback}"
-
-    code = ""
-    try:
-        req_data = {
-            "contents": [{
-                "parts": [{"text": full_prompt}]
-            }]
-        }
-        
-        req = urllib.request.Request(
-            GEMINI_URL,
-            data=json.dumps(req_data).encode('utf-8'),
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        
-        with urllib.request.urlopen(req, timeout=90) as response:
-            res_json = json.loads(response.read().decode('utf-8'))
-            ai_content = res_json["candidates"][0]["content"]["parts"][0]["text"]
-            
-            if "```python" in ai_content:
-                parts = ai_content.split("```python")
-                code = parts[1].split("```")[0].strip()
-            elif "```" in ai_content:
-                parts = ai_content.split("```")
-                code = parts[1].strip()
-            else:
-                code = ai_content.strip()
-                
-    except Exception as e:
-        err_str = str(e).replace('"', "'")
-        code = (
-            f"import tkinter as tk\nfrom tkinter import messagebox\n"
-            f"root = tk.Tk()\nroot.withdraw()\n"
-            f"messagebox.showerror('Błąd Gemini API', 'Wystąpił błąd na serwerze:\\n{err_str}')\n"
-            f"root.destroy()"
-        )
-
-    code_b64 = base64.b64encode(code.encode('utf-8')).decode('utf-8')
-
+    note_id = str(uuid.uuid4())[:8]
+    NOTES_BOARD[note_id] = {
+        "objective": objective,
+        "status": "PENDING",
+        "answer": "Oczekiwanie na odpowiedź od AI / agenta...",
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
     return jsonify({
-        "status": "SUCCESS",
-        "code_b64": code_b64,
-        "message": "Wygenerowano kod przez darmowe API Gemini."
+        "status": "SUCCESS", 
+        "note_id": note_id, 
+        "message": "Zostawiono karteczkę na serwerze."
     })
+
+@app.route("/api/get_notes", methods=["GET"])
+def get_notes():
+    return jsonify({"status": "SUCCESS", "notes": NOTES_BOARD})
+
+@app.route("/api/check_note/<note_id>", methods=["GET"])
+def check_note(note_id):
+    note = NOTES_BOARD.get(note_id)
+    if not note:
+        return jsonify({"status": "ERROR", "message": "Nie znaleziono takiej karteczki"}), 404
+    return jsonify({"status": "SUCCESS", "note": note})
+
+@app.route("/api/answer_note/<note_id>", methods=["POST"])
+def answer_note(note_id):
+    data = request.json or {}
+    answer = data.get("answer", "").strip()
+    if not answer:
+        return jsonify({"status": "ERROR", "message": "Brak treści odpowiedzi"}), 400
+    
+    if note_id not in NOTES_BOARD:
+        return jsonify({"status": "ERROR", "message": "Nie znaleziono takiej karteczki"}), 404
+    
+    NOTES_BOARD[note_id]["answer"] = answer
+    NOTES_BOARD[note_id]["status"] = "DONE"
+    return jsonify({"status": "SUCCESS", "message": "Dopisano odpowiedź do karteczki."})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
