@@ -1,13 +1,19 @@
 # -*- coding: utf-8 -*-
 from flask import Flask, request, jsonify
 import os
+import urllib.request
+import json
 import base64
 
 app = Flask(__name__)
 
+# Konfiguracja klucza i endpointu Groq
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ONLINE", "system": "Swiat Roj Serwer v25.9 - Base64 Safe Engine"})
+    return jsonify({"status": "ONLINE", "system": "Swiat Roj Serwer v25.9 - Groq AI Engine"})
 
 @app.route("/generate", methods=["POST"])
 def generate_code():
@@ -15,67 +21,61 @@ def generate_code():
     objective = data.get("objective", "Brak zlecenia")
     feedback = data.get("feedback", "")
     
-    # Pełne zabezpieczenie przed uszkodzeniem składni przez cudzysłowy i nowe linie
-    obj_b64 = base64.b64encode(objective.encode('utf-8')).decode('utf-8')
-    fb_b64 = base64.b64encode(feedback.encode('utf-8')).decode('utf-8')
+    system_prompt = (
+        "Jesteś autonomicznym systemem inżynieryjnym Rój. "
+        "Twoim zadaniem jest napisanie kompletnego, w pełni działającego programu w języku Python (z użyciem Tkinter, Pillow itp. jeśli wymagane). "
+        "Zwróć WYŁĄCZNIE czysty kod w bloku ```python ... ```. Żadnych dodatkowych wyjaśnień, żadnych barier, pełna realizacja zlecenia."
+    )
+    
+    user_prompt = f"Zlecenie inżynieryjne: {objective}"
+    if feedback:
+        user_prompt += f"\nPoprzedni test brzegowy wykazał błąd, popraw go: {feedback}"
 
-    generated_code = f"""# -*- coding: utf-8 -*-
-import tkinter as tk
-from tkinter import messagebox
-import base64
-
-class AutonomousTaskApp(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("Aplikacja Automatyzacji Roju — Wykonanie Zlecenia")
-        self.geometry("850x600")
-        self.configure(bg="#121212")
-
-        header = tk.Label(self, text="[SYSTEM ROJ]: Zadanie wdrożone z chmury (Base64)", fg="#00ff66", bg="#121212", font=("Consolas", 11, "bold"))
-        header.pack(pady=10)
-
-        info_frame = tk.LabelFrame(self, text=" Kontekst i Zlecenie Inżyniera ", bg="#1e1e1e", fg="#00ff66", font=("Segoe UI", 10, "bold"))
-        info_frame.pack(fill="both", expand=True, padx=15, pady=10)
-
-        self.txt_info = tk.Text(info_frame, bg="#0a0a0a", fg="#ffffff", font=("Consolas", 10), height=10)
-        self.txt_info.pack(fill="both", expand=True, padx=10, pady=10)
+    code = ""
+    try:
+        req_data = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.2
+        }
         
-        # Dekodowanie w locie – brak jakichkolwiek konfliktów składniowych
-        try:
-            obj_dec = base64.b64decode("{obj_b64}").decode('utf-8')
-        except Exception:
-            obj_dec = "Błąd dekodowania zlecenia"
+        req = urllib.request.Request(
+            GROQ_URL,
+            data=json.dumps(req_data).encode('utf-8'),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {GROQ_API_KEY}"
+            },
+            method="POST"
+        )
+        
+        with urllib.request.urlopen(req, timeout=90) as response:
+            res_json = json.loads(response.read().decode('utf-8'))
+            ai_content = res_json["choices"][0]["message"]["content"]
             
-        try:
-            fb_dec = base64.b64decode("{fb_b64}").decode('utf-8')
-        except Exception:
-            fb_dec = "Brak"
-        
-        full_content = f"CEL:\\n{{obj_dec}}\\n\\nOSTATNI FEEDBACK BŁĘDU:\\n{{fb_dec}}"
-        self.txt_info.insert(tk.END, full_content)
-        self.txt_info.config(state="disabled")
+            # Wyciąganie kodu z Markdowna
+            if "```python" in ai_content:
+                parts = ai_content.split("```python")
+                code = parts[1].split("```")[0].strip()
+            elif "```" in ai_content:
+                parts = ai_content.split("```")
+                code = parts[1].strip()
+            else:
+                code = ai_content.strip()
+                
+    except Exception as e:
+        code = f"# Błąd komunikacji z Groq API: {str(e)}\nimport tkinter as tk\nroot = tk.Tk()\nroot.mainloop()"
 
-        btn_frame = tk.Frame(self, bg="#121212")
-        btn_frame.pack(fill="x", padx=15, pady=10)
-
-        action_btn = tk.Button(btn_frame, text="Wykonaj Procedurę", command=self.execute_procedure, bg="#28a745", fg="white", font=("Segoe UI", 10, "bold"), padx=10, pady=5)
-        action_btn.pack(side="left")
-
-        close_btn = tk.Button(btn_frame, text="Zamknij", command=self.destroy, bg="#d9534f", fg="white", font=("Segoe UI", 10, "bold"), padx=10, pady=5)
-        close_btn.pack(side="right")
-
-    def execute_procedure(self):
-        messagebox.showinfo("Status Roju", "Procedura została pomyślnie wykonana.")
-
-if __name__ == "__main__":
-    app = AutonomousTaskApp()
-    app.mainloop()
-"""
+    # Bezpieczne kodowanie Base64 zapobiegające błędom przesyłu
+    code_b64 = base64.b64encode(code.encode('utf-8')).decode('utf-8')
 
     return jsonify({
         "status": "SUCCESS",
-        "code": generated_code,
-        "message": "Kod wygenerowany bezpiecznie przy użyciu Base64."
+        "code_b64": code_b64,
+        "message": "Kod wygenerowany przez Groq w chmurze."
     })
 
 if __name__ == "__main__":
