@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 from flask import Flask, request, jsonify
 import os
+import base64
 
 app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ONLINE", "system": "Swiat Roj Serwer v25.9 - Robust Engine"})
+    return jsonify({"status": "ONLINE", "system": "Swiat Roj Serwer v25.9 - Base64 Safe Engine"})
 
 @app.route("/generate", methods=["POST"])
 def generate_code():
@@ -14,13 +15,14 @@ def generate_code():
     objective = data.get("objective", "Brak zlecenia")
     feedback = data.get("feedback", "")
     
-    # Bezpieczne osadzenie zlecenia i opcjonalnego feedbacku o błędzie
-    safe_objective = repr(objective)
-    safe_feedback = repr(feedback) if feedback else "Brak"
+    # Pełne zabezpieczenie przed uszkodzeniem składni przez cudzysłowy i nowe linie
+    obj_b64 = base64.b64encode(objective.encode('utf-8')).decode('utf-8')
+    fb_b64 = base64.b64encode(feedback.encode('utf-8')).decode('utf-8')
 
     generated_code = f"""# -*- coding: utf-8 -*-
 import tkinter as tk
 from tkinter import messagebox
+import base64
 
 class AutonomousTaskApp(tk.Tk):
     def __init__(self):
@@ -29,7 +31,7 @@ class AutonomousTaskApp(tk.Tk):
         self.geometry("850x600")
         self.configure(bg="#121212")
 
-        header = tk.Label(self, text="[SYSTEM ROJ]: Zadanie wdrożone z chmury", fg="#00ff66", bg="#121212", font=("Consolas", 11, "bold"))
+        header = tk.Label(self, text="[SYSTEM ROJ]: Zadanie wdrożone z chmury (Base64)", fg="#00ff66", bg="#121212", font=("Consolas", 11, "bold"))
         header.pack(pady=10)
 
         info_frame = tk.LabelFrame(self, text=" Kontekst i Zlecenie Inżyniera ", bg="#1e1e1e", fg="#00ff66", font=("Segoe UI", 10, "bold"))
@@ -38,11 +40,18 @@ class AutonomousTaskApp(tk.Tk):
         self.txt_info = tk.Text(info_frame, bg="#0a0a0a", fg="#ffffff", font=("Consolas", 10), height=10)
         self.txt_info.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Bezpiecznie wstrzyknięty cel
-        objective_text = {safe_objective}
-        feedback_text = {safe_feedback}
+        # Dekodowanie w locie – brak jakichkolwiek konfliktów składniowych
+        try:
+            obj_dec = base64.b64decode("{obj_b64}").decode('utf-8')
+        except Exception:
+            obj_dec = "Błąd dekodowania zlecenia"
+            
+        try:
+            fb_dec = base64.b64decode("{fb_b64}").decode('utf-8')
+        except Exception:
+            fb_dec = "Brak"
         
-        full_content = f"CEL:\\n{{objective_text}}\\n\\nOSTATNI FEEDBACK BŁĘDU:\\n{{feedback_text}}"
+        full_content = f"CEL:\\n{{obj_dec}}\\n\\nOSTATNI FEEDBACK BŁĘDU:\\n{{fb_dec}}"
         self.txt_info.insert(tk.END, full_content)
         self.txt_info.config(state="disabled")
 
@@ -66,7 +75,7 @@ if __name__ == "__main__":
     return jsonify({
         "status": "SUCCESS",
         "code": generated_code,
-        "message": "Kod wygenerowany i zabezpieczony."
+        "message": "Kod wygenerowany bezpiecznie przy użyciu Base64."
     })
 
 if __name__ == "__main__":
