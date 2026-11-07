@@ -1,45 +1,8 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use tokio::time::{sleep, Duration};
-use warp::Filter;
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct TechnicalData {
-    pub id: usize,
-    pub source: String,
-    pub title: String,
-    pub url: String,
-    pub content: String,
-    pub timestamp: String,
-    pub is_verified: bool,
-}
-
-// Globalny bufor zweryfikowanej wiedzy przechowywany w pamięci serwera
-use std::sync::{Arc, Mutex};
-type SharedKnowledge = Arc<Mutex<Vec<TechnicalData>>>;
-
-#[tokio::main]
-async fn main() {
-    let knowledge_db: SharedKnowledge = Arc::new(Mutex::new(Vec::new()));
-
-    // Wątek w tle zbierający realne dane z prawdziwych źródeł (np. arXiv API)
-    let db_cloned = knowledge_db.clone();
-    tokio::spawn(async move {
-        let client = reqwest::Client::new();
-        let mut counter = 1;
-
-        loop {
-            println!("[HARVESTER] Rozpoczęcie pobierania zweryfikowanych danych technicznych z arXiv...");
-
-            // Prawdziwe, otwarte API arXiv dla inżynierii, automatyki i informatyki
-            let target_url = "http://export.arxiv.org/api/query?search_query=cat:cs.RO+OR+cat:eess.SY&max_results=5&sortBy=submittedDate&sortOrder=descending";
-
-            match client.get(target_url).send().await {
+match client.get(target_url).send().await {
                 Ok(resp) => {
-                    if let Ok(text) = resp.text().strip_prefix("").map(|_| resp_text(&resp).await) {
-                        // Tutaj w uproszczony sposób parsujemy i filtrujemy realny strumień danych
-                        // Weryfikacja: sprawdzamy, czy treść zawiera sensowne terminy techniczne
-                        let verified = true; // Docelowo parsowanie XML z arXiv
+                    // Pobieramy tekst odpowiedzi asynchronicznie
+                    if let Ok(text) = resp.text().await {
+                        let verified = !text.is_empty(); // Prosta weryfikacja czy treść nie jest pusta
 
                         let item = TechnicalData {
                             id: counter,
@@ -53,7 +16,6 @@ async fn main() {
 
                         let mut db = db_cloned.lock().unwrap();
                         db.push(item);
-                        // Trzymamy ostatnie 50 wpisów
                         if db.len() > 50 {
                             db.remove(0);
                         }
@@ -65,25 +27,3 @@ async fn main() {
                     println!("[AWARIA] Błąd połączenia ze źródłem zewnętrznym: {}", e);
                 }
             }
-
-            // Cykl zbierania danych co 15 minut
-            sleep(Duration::from_secs(900)).await;
-        }
-    });
-
-    // Endpoint HTTP JSON zwracający zweryfikowane dane do naszej aplikacji w Pythonie
-    let db_filter = warp::any().map(move || knowledge_db.clone());
-    let api_route = warp::path::end()
-        .and(db_filter)
-        .map(|db: SharedKnowledge| {
-            let data = db.lock().unwrap();
-            warp::reply::json(&*data)
-        });
-
-    println!("[SERWER RUST] Uruchomiony i nasłuchuje na porcie 8080...");
-    warp::serve(api_route).run(([0, 0, 0, 0], 8080)).await;
-}
-
-async fn resp_text(resp: &reqwest::Response) -> String {
-    resp.text().await.unwrap_or_default()
-}
