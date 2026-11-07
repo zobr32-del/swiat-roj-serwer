@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
 use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio::time::{self, Duration};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -18,17 +20,18 @@ struct HarvestedItem {
 struct DataSourceHarvester {
     allowed_sources: HashSet<String>,
     client: reqwest::Client,
+    // Bezpieczna, współbieżna pamięć podręczna na zebrane dane w pamięci serwera
+    stored_items: Arc<Mutex<Vec<HarvestedItem>>>,
 }
 
 impl DataSourceHarvester {
     fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
-            .user_agent("DataHarvesterBot/1.0 (+https://github.com/twoje-konto/repo)")
+            .user_agent("DataHarvesterBot/1.0 (+https://github.com/zobr32-del/swiat-roj-serwer)")
             .build()
             .unwrap();
 
-        // Twarda, bezpieczna biała lista autoryzowanych źródeł i podcastów
         let mut allowed_sources = HashSet::new();
         allowed_sources.insert("https://api.zweryfikowane-podcasty-techniczne.pl/feed".to_string());
         allowed_sources.insert("https://api.pewna-baza-wiedzy.org/v1/items".to_string());
@@ -37,10 +40,10 @@ impl DataSourceHarvester {
         Self {
             allowed_sources,
             client,
+            stored_items: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    // Walidacja źródła – przepuszcza tylko domeny z białej listy
     fn validate_source(&self, url: &str) -> bool {
         self.allowed_sources.iter().any(|source| url.starts_with(source))
     }
@@ -53,15 +56,11 @@ impl DataSourceHarvester {
 
         println!("[POBIERANIE] Pobieranie danych ze zweryfikowanego źródła: {}", endpoint);
         
-        // Przykład zapytania HTTP GET do zweryfikowanego punktu API
         let response = self.client.get(endpoint).send().await?;
         
         if response.status().is_success() {
-            // W docelowym wdrożeniu parsujemy JSON / RSS zgodny ze strukturą źródła
-            // Tutaj upraszczamy do demonstracji bezpiecznego przepływu
             let items: Vec<HarvestedItem> = response.json().await.unwrap_or_else(|_| vec![]);
             
-            // Dodatkowa warstwa weryfikacji flaga bezpieczeństwa
             let verified_items = items.into_iter()
                 .map(|mut item| {
                     item.is_verified = true;
@@ -93,9 +92,10 @@ impl DataSourceHarvester {
             for source in sources_list {
                 match self.fetch_from_source(&source).await {
                     Ok(items) => {
+                        let mut cache = self.stored_items.lock().await;
                         for item in items {
-                            // Tutaj następuje przekazanie zweryfikowanych paczek danych do bazy/modelu
-                            println!("[SUKCES] Zapisano zweryfikowany rekord z: {} | Tytuł: {}", item.source, item.title);
+                            println!("[SUKCES] Dodano do bufora rekord z: {} | Tytuł: {}", item.source, item.title);
+                            cache.push(item);
                         }
                     }
                     Err(e) => eprintln!("[AWARIA] Błąd podczas pobierania ze źródła: {}", e),
@@ -108,24 +108,46 @@ impl DataSourceHarvester {
 
 #[tokio::main]
 async fn main() {
-    // Inicjalizacja serwera nasłuchującego na porcie wymaganym przez Render (np. PORT env)
     let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     println!("[START] Serwer Harvestera w Rust uruchomiony. Port: {}", port);
 
     let harvester = Arc::new(DataSourceHarvester::new());
 
-    // Uruchomienie pętli zbierającej dane w tle asynchronicznym
+    // Uruchomienie pętli zbierającej w tle
     let harvester_clone = Arc::clone(&harvester);
     tokio::spawn(async move {
         harvester_clone.run_harvesting_loop().await;
     });
 
-    // Prosty serwer HTTP utrzymujący instancję jako Web Service na Renderze
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
-    println!("[INFO] Serwer HTTP gotowy na połączenia z Render dashboard.");
+    // Nasłuchiwacze HTTP dla Render
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
+    println!("[INFO] Serwer HTTP gotowy na zapytania JSON.");
 
     loop {
-        let _ = listener.accept().await;
-        // Obsługa pingów od Render w celu utrzymania aktywności instancji (Keep-Alive)
+        let (mut socket, _) = match listener.accept().await {
+            Ok(val) => val,
+            Err(_) => continue,
+        };
+
+        let harvester_ref = Arc::clone(&harvester);
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let mut buf = [0; 1024];
+            let _ = socket.read(&mut buf).await;
+
+            // Pobranie aktualnej listy zweryfikowanych elementów z pamięci
+            let cache = harvester_ref.stored_items.lock().await;
+            let json_body = serde_json::to_string(&*cache).unwrap_or_else(|_| "[]".to_string());
+            drop(cache);
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
     }
 }
