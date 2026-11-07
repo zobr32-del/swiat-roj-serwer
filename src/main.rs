@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tokio::time::{sleep, Duration};
 use warp::Filter;
@@ -20,7 +20,6 @@ type SharedKnowledge = std::sync::Arc<std::sync::Mutex<Vec<TechnicalData>>>;
 async fn main() {
     let knowledge_db: SharedKnowledge = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
-    // Wątek w tle zbierający realne dane z arXiv
     let db_cloned = knowledge_db.clone();
     tokio::spawn(async move {
         let client = reqwest::Client::new();
@@ -60,12 +59,10 @@ async fn main() {
                 }
             }
 
-            // Cykl zbierania danych co 15 minut
             sleep(Duration::from_secs(900)).await;
         }
     });
 
-    // Endpoint HTTP JSON zwracający zweryfikowane dane
     let db_filter = warp::any().map(move || knowledge_db.clone());
     let api_route = warp::path::end()
         .and(db_filter)
