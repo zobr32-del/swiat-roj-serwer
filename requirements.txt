@@ -1,0 +1,1 @@
+# Skrypt korzysta z wbudowanych bibliotek standardowych Pythona
