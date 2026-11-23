@@ -1,10 +1,13 @@
 import json
 import os
+import socket
 import sqlite3
 import threading
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from flask import Flask, jsonify, request
+from werkzeug.serving import ThreadedWSGIServer, WSGIRequestHandler, make_server
 
 app = Flask(__name__)
 
@@ -56,6 +59,7 @@ def init_db(db_path: str) -> None:
 
 
 def save_task_to_db(query: str, source: str, result: str, status: str) -> int:
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with db_lock:
         conn = sqlite3.connect(DB_PATH, timeout=10.0)
         try:
@@ -78,6 +82,9 @@ def save_task_to_db(query: str, source: str, result: str, status: str) -> int:
             if "status" in cols:
                 insert_cols.append("status")
                 insert_vals.append(status)
+            if "created_at" in cols:
+                insert_cols.append("created_at")
+                insert_vals.append(now_str)
 
             placeholders = ", ".join("?" for _ in insert_cols)
             col_list = ", ".join(insert_cols)
@@ -249,7 +256,11 @@ def stats():
         conn.row_factory = sqlite3.Row
         try:
             cols = _table_columns(conn, "tasks")
-            q_expr = "COALESCE(query, description, '')" if "description" in cols else "COALESCE(query, '')"
+            q_expr = (
+                "COALESCE(query, description, '')"
+                if "description" in cols
+                else "COALESCE(query, '')"
+            )
             src_expr = "COALESCE(source, '')" if "source" in cols else "''"
             ts_expr = "COALESCE(created_at, '')" if "created_at" in cols else "''"
 
@@ -284,6 +295,26 @@ def stats():
     })
 
 
+def _serve_with_ipv4_fallback(host: str, port: int) -> None:
+    try:
+        srv = make_server(host, port, app, threaded=True)
+        print(f"OK -> http://{host}:{port}", flush=True)
+        srv.serve_forever()
+    except OSError as exc:
+        print(
+            f"[INFO] Start na {host}:{port} zgłosił {exc} — przełączam na IPv4 127.0.0.1:{port}",
+            flush=True,
+        )
+        ipv4_cls = type(
+            "IPv4WSGIServer",
+            (ThreadedWSGIServer,),
+            {"address_family": socket.AF_INET},
+        )
+        srv = ipv4_cls(("127.0.0.1", port), WSGIRequestHandler, app)
+        print(f"OK -> http://127.0.0.1:{port}", flush=True)
+        srv.serve_forever()
+
+
 if __name__ == "__main__":
     init_db(DB_PATH)
-    app.run(host=HOST, port=PORT, debug=False)
+    _serve_with_ipv4_fallback(HOST, PORT)
