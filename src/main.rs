@@ -1,8 +1,11 @@
+import json
+import os
 import sqlite3
 import threading
 import time
 import urllib.parse
 import urllib.request
+from flask import Flask, jsonify, request
 
 
 class SwarmManager:
@@ -53,6 +56,15 @@ class SwarmManager:
         )
         conn.commit()
 
+  def get_task(self, task_id: int) -> dict | None:
+    with self.db_lock:
+      with self._connect() as conn:
+        row = conn.execute(
+            "SELECT id, description, status, attempts, result FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
   def stop_system(self):
     print(
         "[KILL SWITCH ACTIVATED] Natychmiastowe wstrzymanie wszystkich działań"
@@ -66,24 +78,33 @@ class SwarmManager:
     req = urllib.request.Request(url, headers={"User-Agent": "SwarmCore/1.0"})
     with urllib.request.urlopen(req, timeout=4.0) as resp:
       data = resp.read().decode("utf-8", errors="ignore")
-    import json
-
     parsed = json.loads(data)
     return (parsed.get("AbstractText") or "").strip()
+
+  def _run_agent_logic(self, task, attempt):
+    try:
+      snippet = self._fetch_web_snippet(task)
+      if snippet:
+        return True, snippet
+    except Exception as exc:
+      print(f"[BŁĄD SIECI] Próba {attempt}: {exc}")
+    return False, ""
 
   def execute_task_with_persistence(self, task_description, max_attempts=5):
     task_id = self._create_task_row(task_description)
     print(f"[START #{task_id}] Rozpoczynam zadanie: {task_description}")
     attempts = 0
+    last_payload = ""
 
     while self.running and attempts < max_attempts:
       attempts += 1
-      self._update_task_row(task_id, "RUNNING", attempts, "")
+      self._update_task_row(task_id, "RUNNING", attempts, last_payload)
       ok, payload = self._run_agent_logic(task_description, attempts)
       if ok:
+        last_payload = payload
         self._update_task_row(task_id, "DONE", attempts, payload)
         print(f"[SUKCES #{task_id}] Zadanie rozwiązane: {payload[:140]}")
-        return payload
+        return self.get_task(task_id)
 
       print(
           f"[PONOWIENIE #{task_id}] Próba {attempts}/{max_attempts} bez"
@@ -95,26 +116,37 @@ class SwarmManager:
         time.sleep(0.1)
 
     final_status = "STOPPED" if not self.running else "FAILED"
-    self._update_task_row(task_id, final_status, attempts, "")
+    self._update_task_row(task_id, final_status, attempts, last_payload)
     print(f"[KONIEC #{task_id}] Status: {final_status} po {attempts} próbach.")
-    return ""
+    return self.get_task(task_id)
 
-  def _run_agent_logic(self, task, attempt):
-    try:
-      snippet = self._fetch_web_snippet(task)
-      if snippet:
-        return True, snippet
-    except Exception as exc:
-      print(f"[BŁĄD SIECI] Próba {attempt}: {exc}")
-    return False, ""
+
+app = Flask(__name__)
+manager = SwarmManager(db_path=os.getenv("DB_PATH", "swarm_core.db"))
+
+
+@app.get("/health")
+def health():
+  return jsonify({"status": "ok", "running": manager.running})
+
+
+@app.post("/ask")
+@app.get("/ask")
+def ask():
+  payload = request.get_json(silent=True) or {}
+  query = (payload.get("query") or request.args.get("q") or "").strip()
+  if not query:
+    return jsonify({"error": "Brak zapytania 'query'"}), 400
+  task_data = manager.execute_task_with_persistence(query, max_attempts=3)
+  return jsonify({"query": query, "task": task_data})
+
+
+@app.post("/stop")
+def stop():
+  manager.stop_system()
+  return jsonify({"status": "stopped"})
 
 
 if __name__ == "__main__":
-  manager = SwarmManager()
-  t = threading.Thread(
-      target=manager.execute_task_with_persistence,
-      args=("Modbus TCP Python",),
-      daemon=True,
-  )
-  t.start()
-  t.join(timeout=15)
+  port = int(os.getenv("PORT", "8000"))
+  app.run(host="0.0.0.0", port=port)
