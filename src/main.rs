@@ -17,6 +17,12 @@ db_lock = threading.Lock()
 task_counter = 0
 
 
+def _table_columns(conn: sqlite3.Connection, table: str = "tasks") -> set[str]:
+    cur = conn.cursor()
+    cur.execute(f"PRAGMA table_info({table})")
+    return {str(row[1]) for row in cur.fetchall()}
+
+
 def init_db(db_path: str) -> None:
     folder = os.path.dirname(db_path)
     if folder:
@@ -28,14 +34,22 @@ def init_db(db_path: str) -> None:
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    query TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    result TEXT NOT NULL,
-                    status TEXT NOT NULL,
+                    query TEXT,
+                    description TEXT,
+                    source TEXT,
+                    result TEXT,
+                    status TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
+            cols = _table_columns(conn, "tasks")
+            if "query" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN query TEXT")
+            if "source" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN source TEXT")
+            if "created_at" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN created_at DATETIME")
             conn.commit()
         finally:
             conn.close()
@@ -45,10 +59,32 @@ def save_task_to_db(query: str, source: str, result: str, status: str) -> int:
     with db_lock:
         conn = sqlite3.connect(DB_PATH, timeout=10.0)
         try:
+            cols = _table_columns(conn, "tasks")
+            insert_cols: list[str] = []
+            insert_vals: list[object] = []
+
+            if "query" in cols:
+                insert_cols.append("query")
+                insert_vals.append(query)
+            if "description" in cols:
+                insert_cols.append("description")
+                insert_vals.append(query)
+            if "source" in cols:
+                insert_cols.append("source")
+                insert_vals.append(source)
+            if "result" in cols:
+                insert_cols.append("result")
+                insert_vals.append(result)
+            if "status" in cols:
+                insert_cols.append("status")
+                insert_vals.append(status)
+
+            placeholders = ", ".join("?" for _ in insert_cols)
+            col_list = ", ".join(insert_cols)
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO tasks (query, source, result, status) VALUES (?, ?, ?, ?)",
-                (query, source, result, status),
+                f"INSERT INTO tasks ({col_list}) VALUES ({placeholders})",
+                tuple(insert_vals),
             )
             conn.commit()
             return int(cur.lastrowid or 0)
@@ -117,7 +153,9 @@ def _fetch_once(term: str, timeout: float = 5.0) -> tuple[str, str]:
     return "", ""
 
 
-def fetch_web_summary(query: str, seq: int = 0, retries: int = 3, timeout: float = 5.0) -> tuple[str, str, str]:
+def fetch_web_summary(
+    query: str, seq: int = 0, retries: int = 3, timeout: float = 5.0
+) -> tuple[str, str, str]:
     q = " ".join((query or "").split())[:90].strip()
     if not q:
         return "brak", "", "FAILED"
@@ -134,7 +172,10 @@ def fetch_web_summary(query: str, seq: int = 0, retries: int = 3, timeout: float
             source, summary = _fetch_once(term, timeout=timeout)
             if summary:
                 return source, summary, "DONE"
-        print(f"[PONOWIENIE #{seq}] Próba {attempt}/{retries} bez pełnego wyniku.", flush=True)
+        print(
+            f"[PONOWIENIE #{seq}] Próba {attempt}/{retries} bez pełnego wyniku.",
+            flush=True,
+        )
 
     fallback_text = (
         f"Hasło techniczne „{q}”: brak pełnego wpisu w otwartej encyklopedii — "
@@ -207,6 +248,11 @@ def stats():
         conn = sqlite3.connect(DB_PATH, timeout=10.0)
         conn.row_factory = sqlite3.Row
         try:
+            cols = _table_columns(conn, "tasks")
+            q_expr = "COALESCE(query, description, '')" if "description" in cols else "COALESCE(query, '')"
+            src_expr = "COALESCE(source, '')" if "source" in cols else "''"
+            ts_expr = "COALESCE(created_at, '')" if "created_at" in cols else "''"
+
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) AS cnt FROM tasks")
             total = int(cur.fetchone()["cnt"] or 0)
@@ -220,8 +266,8 @@ def stats():
                 by_status[(row["st"] or "UNKNOWN").strip()] = int(row["cnt"] or 0)
 
             cur.execute(
-                "SELECT id, query, source, status, created_at FROM tasks "
-                "ORDER BY id DESC LIMIT 5"
+                f"SELECT id, {q_expr} AS query, {src_expr} AS source, "
+                f"status, {ts_expr} AS created_at FROM tasks ORDER BY id DESC LIMIT 5"
             )
             recent = [dict(r) for r in cur.fetchall()]
         finally:
